@@ -1,0 +1,5 @@
+.env
+
+PORT=5000
+FRONTEND_URL=http://localhost:3000
+MONGO_URI=mongodb://wisdr-server:sehq9bmFCGGmjy5o@ac-qvgzn8x-shard-00-00.73lq38l.mongodb.net:27017,ac-qvgzn8x-shard-00-01.73lq38l.mongodb.net:27017,ac-qvgzn8x-shard-00-02.73lq38l.mongodb.net:27017/?ssl=true&replicaSet=atlas-4355l9-shard-0&authSource=admin&appName=Cluster0
