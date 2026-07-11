@@ -30,9 +30,11 @@ async function run() {
     await client.connect();
     
     const db = client.db('wisdr-server');
+    const userDB = client.db('wisdr-users');
+    const userCollection = userDB.collection('user');
     const lessonCollections = db.collection('lessons');
     const commentCollections = db.collection('comments');
-    const reportCollections = db.collection('reports')
+    const reportCollections = db.collection('reports');
     
     app.post('/dashboard/add-lesson', async(req, res) => {
         const data = req.body;
@@ -162,24 +164,447 @@ async function run() {
   });
 
   // F. Create Entry in content Flag Reports Collection Route Handler
-  app.post('/reports', async (req, res) => {
-    try {
-      const payload = {
-        ...req.body,
-        timestamp: new Date(req.body.timestamp)
-      };
-      await reportCollections.insertOne(payload);
-      res.status(201).json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: error.message });
+app.post("/reports", async (req, res) => {
+  try {
+    const payload = {
+      ...req.body,
+      timestamp: new Date(req.body.timestamp),
+    };
+
+    await reportCollections.insertOne(payload);
+
+    res.status(201).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// admin profile 
+
+app.get("/dashboard/admin/profile", async (req, res) => {
+  const { email } = req.query;
+
+  const admin = await userCollection.findOne({ email });
+
+  if (!admin) {
+    return res.status(404).json({ message: "Admin not found" });
+  }
+
+  res.json(admin);
+});
+
+// subscription successfull
+
+app.patch("/pricing/success", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    const user = await userCollection.findOne({ email });
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found",
+      });
     }
-  });
+
+    // Keep admins as admins
+    if (user.role === "admin") {
+      return res.json({
+        success: true,
+        role: "admin",
+        message: "Admin role unchanged.",
+      });
+    }
+
+    // Upgrade normal users to pro
+    await userCollection.updateOne(
+      { email },
+      {
+        $set: {
+          role: "pro",
+        },
+      }
+    );
+
+    res.json({
+      success: true,
+      role: "pro",
+      message: "Subscription activated.",
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message,
+    });
+  }
+});
+
+
 
   // check session token for stripe payment : subscription check
 
+  // G. total users
+  app.get("/dashboard/admin", async (req, res) => {
+    const today = new Date().toISOString().split("T")[0];
 
-  
+    const userCount = await userCollection.countDocuments();
+    const publicLessonCount = await lessonCollections.countDocuments();
+    const reportCount = await reportCollections.countDocuments();
+
+    const todayNewLessons = await lessonCollections
+      .find({
+        createdDate: { $regex: `^${today}` },
+      })
+      .toArray();
+
+    const contributors = await lessonCollections
+      .aggregate([
+        {
+          $group: {
+            _id: "$creatorEmail",
+            totalLessons: { $sum: 1 },
+            creatorName: { $first: "$creatorName" },
+            creatorImage: { $first: "$creatorImage" },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            creatorEmail: "$_id",
+            creatorName: 1,
+            creatorImage: 1,
+            totalLessons: 1,
+          },
+        },
+        {
+          $sort: {
+            totalLessons: -1,
+          },
+        },
+        {
+          $limit: 5,
+        },
+      ])
+      .toArray();
+
+    const adminHome = {
+      userCount,
+      publicLessonCount,
+      reportCount,
+      todayNewLessons,
+      contributors,
+    };
+
+    res.json(adminHome);
+  });
+// H. Get all users with total lessons
+app.get("/dashboard/admin/manage-users", async (req, res) => {
+  const users = await userCollection.find().toArray();
+
+  const usersWithLessons = await Promise.all(
+    users.map(async (user) => {
+      const totalLessons = await lessonCollections.countDocuments({
+        creatorEmail: user.email,
+      });
+
+      return {
+        ...user,
+        totalLessons,
+      };
+    })
+  );
+
+  res.json(usersWithLessons);
+});
+
+  // I. Update user role
+  app.patch("/dashboard/admin/manage-users/:id", async (req, res) => {
+    const { id } = req.params;
+    const { role } = req.body;
+
+    const result = await userCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: { role },
+      }
+    );
+
+    res.json(result);
+  });
     
+  // manage- lessons by admin 
+
+    app.get("/dashboard/admin/manage-lessons", async (req, res) => {
+    const { category, visibility } = req.query;
+
+    const query = {};
+
+    if (category) {
+      query.category = category;
+    }
+
+    if (visibility) {
+      query.visibility = visibility;
+    }
+
+    const lessons = await lessonCollections.find(query).toArray();
+
+    const publicLessonsCount = await lessonCollections.countDocuments({
+      visibility: "Public",
+    });
+
+    const privateLessonsCount = await lessonCollections.countDocuments({
+      visibility: "Private",
+    });
+
+    const flaggedLessonsCount = await reportCollections.countDocuments();
+
+    res.json({
+      lessons,
+      publicLessonsCount,
+      privateLessonsCount,
+      flaggedLessonsCount,
+    });
+  });
+  
+    app.delete("/dashboard/admin/manage-lessons/:id", async (req, res) => {
+    const result = await lessonCollections.deleteOne({
+      _id: new ObjectId(req.params.id),
+    });
+
+    res.json(result);
+  });
+    app.patch("/dashboard/admin/manage-lessons/:id", async (req, res) => {
+    const { featured, reviewed } = req.body;
+
+    const update = {};
+
+    if (featured !== undefined) {
+      update.featured = featured;
+    }
+
+    if (reviewed !== undefined) {
+      update.reviewed = reviewed;
+    }
+
+    const result = await lessonCollections.updateOne(
+      {
+        _id: new ObjectId(req.params.id),
+      },
+      {
+        $set: update,
+      }
+    );
+
+    res.json(result);
+  });
+
+    app.patch("/dashboard/admin/manage-lessons/:id", async (req, res) => {
+    const { featured, reviewed } = req.body;
+
+    const update = {};
+
+    if (featured !== undefined) {
+      update.featured = featured;
+    }
+
+    if (reviewed !== undefined) {
+      update.reviewed = reviewed;
+    }
+
+    const result = await lessonCollections.updateOne(
+      { _id: new ObjectId(req.params.id) },
+      {
+        $set: update,
+      }
+    );
+
+    res.json(result);
+  });
+
+  // report 
+
+  app.get("/dashboard/admin/reported-lessons", async (req, res) => {
+  const reports = await reportCollections
+    .aggregate([
+      {
+        $group: {
+          _id: "$lessonId",
+          reportCount: { $sum: 1 },
+          reports: {
+            $push: {
+              reason: "$reason",
+              reporterName: "$reporterName",
+              reporterEmail: "$reporterEmail",
+              timestamp: "$timestamp",
+            },
+          },
+        },
+      },
+    ])
+    .toArray();
+
+  const result = await Promise.all(
+    reports.map(async (report) => {
+      const lesson = await lessonCollections.findOne({
+        _id: new ObjectId(report._id),
+      });
+
+      return {
+        lessonId: report._id,
+        lessonTitle: lesson?.title ?? "Deleted Lesson",
+        reportCount: report.reportCount,
+        reports: report.reports,
+      };
+    })
+  );
+
+  res.json(result);
+});
+
+app.delete("/dashboard/admin/reported-lessons/:id", async (req, res) => {
+  const { id } = req.params;
+
+  await lessonCollections.deleteOne({
+    _id: new ObjectId(id),
+  });
+
+  await reportCollections.deleteMany({
+    lessonId: id,
+  });
+
+  res.json({
+    success: true,
+  });
+});
+
+app.delete("/dashboard/admin/reported-lessons/:id/ignore", async (req, res) => {
+  const { id } = req.params;
+
+  await reportCollections.deleteMany({
+    lessonId: id,
+  });
+
+  res.json({
+    success: true,
+  });
+});
+
+// users dashboard 
+
+app.get("/dashboard", async (req, res) => {
+  const { email } = req.query;
+
+  const totalLessons = await lessonCollections.countDocuments({
+    creatorEmail: email,
+  });
+
+  const totalSaved = await lessonCollections.countDocuments({
+    favorites: email,
+  });
+
+  const recentlyAdded = await lessonCollections
+    .find({ creatorEmail: email })
+    .sort({ createdDate: -1 })
+    .limit(5)
+    .toArray();
+
+  const dashboard = {
+    totalLessons,
+    totalSaved,
+    recentlyAdded,
+  };
+
+  res.json(dashboard);
+});
+
+// favorite
+
+app.get("/dashboard/my-favorites", async (req, res) => {
+  const { email, category, emotionalTone } = req.query;
+
+  const query = {
+    favorites: email,
+  };
+
+  if (category) {
+    query.category = category;
+  }
+
+  if (emotionalTone) {
+    query.emotionalTone = emotionalTone;
+  }
+
+  const lessons = await lessonCollections
+    .find(query)
+    .sort({ createdDate: -1 })
+    .toArray();
+
+  res.json(lessons);
+});
+// remove favorite 
+
+app.patch("/dashboard/my-favorites/:id", async (req, res) => {
+  const { id } = req.params;
+  const { email } = req.body;
+
+  const result = await lessonCollections.updateOne(
+    { _id: new ObjectId(id) },
+    {
+      $pull: {
+        favorites: email,
+      },
+    }
+  );
+
+  res.json(result);
+});
+// user profile 
+
+app.get("/dashboard/profile", async (req, res) => {
+  const { email } = req.query;
+
+  const user = await userCollection.findOne({ email });
+
+  const totalLessons = await lessonCollections.countDocuments({
+    creatorEmail: email,
+  });
+
+  const totalSaved = await lessonCollections.countDocuments({
+    favorites: email,
+  });
+
+  const publicLessons = await lessonCollections
+    .find({
+      creatorEmail: email,
+      visibility: "Public",
+    })
+    .sort({ createdDate: -1 })
+    .toArray();
+
+  res.json({
+    user,
+    totalLessons,
+    totalSaved,
+    publicLessons,
+  });
+});
+// update profile 
+app.patch("/dashboard/profile/:id", async (req, res) => {
+  const { id } = req.params;
+  const { name, image } = req.body;
+
+  const result = await userCollection.updateOne(
+    { _id: new ObjectId(id) },
+    {
+      $set: {
+        name,
+        image,
+      },
+    }
+  );
+
+  res.json(result);
+});
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
