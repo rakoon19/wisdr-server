@@ -574,12 +574,7 @@ app.get('/', (req, res) => {
     res.send('hello world');
 });
 
-// Avoid port locks during remote continuous container lifecycle setups
-if (process.env.NODE_ENV !== 'production') {
-  app.listen(process.env.PORT || 5000, () => {
-      console.log(`App is running on port ${process.env.PORT || 5000}`);
-  });
-}
+
 
 // CRITICAL VERCEL ROUTING MIDDLEWARE BINDING EXPORT 
 module.exports = app;
