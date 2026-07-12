@@ -63,11 +63,67 @@ async function run() {
       res.status(500).json({ message: "Server parsing error", error: error.message });
     }
   });
-    
-    app.get('/public', async(req, res) => {
-        const cursor = await lessonCollections.find().toArray(); 
-        res.send(cursor);
-    })
+
+      app.get('/public', async (req, res) => {
+    try {
+      const limitOnePage = 9;
+      
+      // Parse values sent out by parameters
+      const page = parseInt(req.query.page) || 1;
+      const search = req.query.search || "";
+      const category = req.query.category || "";
+      const emotionalTone = req.query.emotionalTone || "";
+      const sort = req.query.sort || "newest";
+
+      // 1. Assembling dynamic query filtering objects
+      let queryObject = {};
+
+      // Filter by Search Match (Title/Description Keyword)
+      if (search) {
+        queryObject.$or = [
+          { title: { $regex: search, $options: "i" } },
+          { description: { $regex: search, $options: "i" } }
+        ];
+      }
+
+      // Filter by Exact Match Category
+      if (category) {
+        queryObject.category = category;
+      }
+
+      // Filter by Exact Match Emotional Tone
+      if (emotionalTone) {
+        queryObject.emotionalTone = emotionalTone;
+      }
+
+      // 2. Setting up Sort execution configuration rules
+      let sortObject = {};
+      if (sort === "most-saved") {
+        sortObject.savedCount = -1; // Assuming your items contain a numeric field 'savedCount'
+      } else {
+        sortObject.createdDate = -1; // Default fallback to newest listings
+      }
+
+      // 3. Perform accurate math pagination skipping calculations
+      const skipAmount = (page - 1) * limitOnePage;
+
+      // Execute queries concurrently using Promise.all to optimize execution speed
+      const [cursor, totalDoc] = await Promise.all([
+        lessonCollections
+          .find(queryObject)
+          .sort(sortObject)
+          .skip(skipAmount)
+          .limit(limitOnePage)
+          .toArray(),
+        lessonCollections.countDocuments(queryObject) // Crucial: Count matching criteria documents, not everything!
+      ]);
+
+      res.send({ cursor, totalDoc });
+    } catch (error) {
+      console.error("Backend filter database error:", error);
+      res.status(500).send({ message: "Error compiling filtered datasets", error });
+    }
+  });
     
 
       app.get('/public/:id', async (req, res) => {
